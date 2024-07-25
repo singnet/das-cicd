@@ -3,9 +3,8 @@ import github
 
 
 def write_outputs(outputs: dict):
-    with open(os.getenv("GITHUB_OUTPUT"), "a") as f:
-        for key, value in outputs.items():
-            f.write(f"${key}={value}\n")
+    for key, value in outputs.items():
+        print(f"::set-output name={key}::{value}")
 
 
 def main():
