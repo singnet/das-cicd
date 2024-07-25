@@ -28,6 +28,9 @@ class Workflow:
     def _get_run_url(self, run_id: str):
         return f"https://api.github.com/repos/{self._auth.org}/{self._auth.repo}/actions/runs/{run_id}"
 
+    def _get_jobs_url(self, run_id: str):
+        return f"https://api.github.com/repos/{self._auth.org}/{self._auth.repo}/actions/runs/{run_id}/jobs"
+
     def _dispatch_workflow(self, ref: str, workflow_id: str):
         url = self._get_dispatch_url(workflow_id)
 
@@ -89,8 +92,47 @@ class Workflow:
                 print(response.text)
                 response.raise_for_status()
 
+    # TODO(DAS): Manage multiple failed jobs
+    def _get_failed_job(self, run_id: str):
+        url = self._get_jobs_url(run_id)
+        response = requests.get(url, headers=self._auth.get_authenticated_header())
+
+        if response.status_code != 200:
+            print("Failed to retrieve Jobs list.")
+            print(response.text)
+            response.raise_for_status()
+
+        try:
+            jobs = response.json().get("jobs", [])
+        except ValueError:
+            print("Invalid JSON response.")
+            return []
+
+        for job in jobs:
+            if job.get("conclusion") == "failure":
+                for step in job.get("steps", []):
+                    if step.get("conclusion") == "failure":
+                        return {
+                            "url": job["html_url"],
+                            "failed_at": step["name"],
+                        }
+
+        return None
+
     def invoke(self, ref: str, workflow_id: str):
         self._dispatch_workflow(ref, workflow_id)
         time.sleep(10)
         run_id = self._get_latest_run_id(workflow_id)
-        return self._wait_for_completion(run_id)
+        conclusion = self._wait_for_completion(run_id)
+
+        workflow_response = {
+            "run_id": run_id,
+            "conclusion": conclusion,
+            "failed_job": None,
+        }
+
+        if conclusion != "success":
+            failed_job = self._get_failed_job(run_id)
+            workflow_response["failed_job"] = failed_job
+
+        return workflow_response
