@@ -22,12 +22,12 @@ def main():
 
     workflow = github.Workflow(auth)
 
-    conclusion = workflow.invoke(
+    workflow_result = workflow.invoke(
         ref=git_reference,
         workflow_id=workflow_id,
     )
 
-    write_outputs({"conclusion": conclusion})
+    write_outputs(workflow_result)
 
 
 if __name__ == "__main__":
