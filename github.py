@@ -1,5 +1,6 @@
 import requests
 import time
+import json
 
 
 class Auth:
@@ -92,10 +93,10 @@ class Workflow:
                 print(response.text)
                 response.raise_for_status()
 
-    # TODO(DAS): Manage multiple failed jobs
-    def _get_failed_job(self, run_id: str):
+    def _get_failed_jobs(self, run_id: str):
         url = self._get_jobs_url(run_id)
         response = requests.get(url, headers=self._auth.get_authenticated_header())
+        failed_jobs = []
 
         if response.status_code != 200:
             print("Failed to retrieve Jobs list.")
@@ -112,12 +113,14 @@ class Workflow:
             if job.get("conclusion") == "failure":
                 for step in job.get("steps", []):
                     if step.get("conclusion") == "failure":
-                        return {
-                            "url": job["html_url"],
-                            "failed_at": step["name"],
-                        }
+                        failed_jobs.append(
+                            {
+                                "url": job["html_url"],
+                                "failed_at": step["name"],
+                            }
+                        )
 
-        return None
+        return failed_jobs
 
     def invoke(self, ref: str, workflow_id: str):
         self._dispatch_workflow(ref, workflow_id)
@@ -128,11 +131,11 @@ class Workflow:
         workflow_response = {
             "run_id": run_id,
             "conclusion": conclusion,
-            "failed_job": None,
+            "failed_jobs": None,
         }
 
         if conclusion != "success":
-            failed_job = self._get_failed_job(run_id)
-            workflow_response["failed_job"] = failed_job
+            failed_jobs = self._get_failed_jobs(run_id)
+            workflow_response["failed_jobs"] = json.dumps(failed_jobs)
 
         return workflow_response
