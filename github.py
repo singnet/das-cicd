@@ -132,7 +132,7 @@ class Workflow:
             raise ValueError("Expected 'failed_jobs' to be a list")
 
         failed_jobs_display = "\n".join(
-            [f"- {job['failed_at']}: {job['url']}" for job in failed_jobs]
+            [f"- [{job['failed_at']}]({job['url']})" for job in failed_jobs]
         )
 
         return failed_jobs_display
