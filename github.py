@@ -1,5 +1,6 @@
 import requests
 import time
+import json
 
 
 class Auth:
@@ -70,32 +71,37 @@ class Workflow:
             print(response.text)
             response.raise_for_status()
 
+    def _get_run(self, run_id: str):
+        response = requests.get(
+            self._get_run_url(run_id),
+            headers=self._auth.get_authenticated_header(),
+        )
+        if response.status_code == 200:
+            return response.json()
+        
+        print("Failed to retrieve workflow run status.")
+        print(response.text)
+        response.raise_for_status()
+
+
+
     def _wait_for_completion(self, run_id: str, interval: int = 30):
         while True:
-            response = requests.get(
-                self._get_run_url(run_id),
-                headers=self._auth.get_authenticated_header(),
-            )
-            if response.status_code == 200:
-                run = response.json()
-                print(f"Current status of workflow run ID {run_id}: {run['status']}")
-                if run["status"] == "completed":
-                    conclusion = run["conclusion"]
-                    print(
-                        f"Workflow run with ID {run_id} has completed with conclusion: {conclusion}"
-                    )
-                    return run["conclusion"]
-                else:
-                    time.sleep(interval)
+            run = self._get_run(run_id)
+            print(f"Current status of workflow run ID {run_id}: {run['status']}")
+            if run["status"] == "completed":
+                conclusion = run["conclusion"]
+                print(
+                    f"Workflow run with ID {run_id} has completed with conclusion: {conclusion}"
+                )
+                return run["conclusion"], run
             else:
-                print("Failed to retrieve workflow run status.")
-                print(response.text)
-                response.raise_for_status()
+                time.sleep(interval)
 
-    # TODO(DAS): Manage multiple failed jobs
-    def _get_failed_job(self, run_id: str):
+    def _get_failed_jobs(self, run_id: str):
         url = self._get_jobs_url(run_id)
         response = requests.get(url, headers=self._auth.get_authenticated_header())
+        failed_jobs = []
 
         if response.status_code != 200:
             print("Failed to retrieve Jobs list.")
@@ -112,27 +118,44 @@ class Workflow:
             if job.get("conclusion") == "failure":
                 for step in job.get("steps", []):
                     if step.get("conclusion") == "failure":
-                        return {
-                            "url": job["html_url"],
-                            "failed_at": step["name"],
-                        }
+                        failed_jobs.append(
+                            {
+                                "url": job["html_url"],
+                                "failed_at": step["name"],
+                            }
+                        )
 
-        return None
+        return failed_jobs
+
+    def _format_failed_jobs_display(self, failed_jobs):
+        if not isinstance(failed_jobs, list):
+            raise ValueError("Expected 'failed_jobs' to be a list")
+
+        failed_jobs_display = "\n".join(
+            [f"- [{job['failed_at']}]({job['url']})" for job in failed_jobs]
+        )
+
+        return failed_jobs_display
 
     def invoke(self, ref: str, workflow_id: str):
         self._dispatch_workflow(ref, workflow_id)
         time.sleep(10)
         run_id = self._get_latest_run_id(workflow_id)
-        conclusion = self._wait_for_completion(run_id)
+        conclusion, run = self._wait_for_completion(run_id)
 
         workflow_response = {
+            "run_url": run["html_url"],
             "run_id": run_id,
             "conclusion": conclusion,
-            "failed_job": None,
+            "failed_jobs_display": None,
+            "failed_jobs": None,
         }
 
         if conclusion != "success":
-            failed_job = self._get_failed_job(run_id)
-            workflow_response["failed_job"] = failed_job
+            failed_jobs = self._get_failed_jobs(run_id)
+            workflow_response["failed_jobs"] = json.dumps(failed_jobs)
+            workflow_response["failed_jobs_display"] = self._format_failed_jobs_display(
+                failed_jobs
+            )
 
         return workflow_response
