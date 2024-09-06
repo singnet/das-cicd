@@ -206,10 +206,10 @@ class Workflow:
         time.sleep(10)
         run_id = self._get_latest_run_id(workflow_id)
         conclusion, run = self._wait_for_completion(run_id)
-        output = self.log.get(run_id)
+        logs = self.log.get(run_id)
 
         workflow_response = {
-            "output": output,
+            "logs": logs,
             "run_url": run["html_url"],
             "run_id": run_id,
             "conclusion": conclusion,
