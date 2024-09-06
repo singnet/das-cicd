@@ -1,9 +1,11 @@
-import zipfile
+import re
 import tempfile
 import os
 import requests
 import time
 import json
+import pathlib
+from utils import remove_special_chars, extract_zip
 
 
 class Auth:
@@ -19,9 +21,70 @@ class Auth:
         }
 
 
+class WorkflowLog:
+    def __init__(self, auth: Auth) -> None:
+        self._auth = auth
+
+    def _get_run_logs_url(self, run_id: str):
+        return f"https://api.github.com/repos/{self._auth.org}/{self._auth.repo}/actions/runs/{run_id}/logs"
+
+    def _download_bin(self, url: str):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+            response = requests.get(url, headers=self._auth.get_authenticated_header())
+            temp_file.write(response.content)
+            temp_file_path = temp_file.name
+
+        return temp_file_path
+
+    def _remove_timestamp_content(self, string: str):
+        pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z"
+        return re.sub(pattern, "", string)
+
+    def _remove_group_content(self, string: str):
+        pattern = r"^.*?\[group\].*?\[endgroup\].*?$"
+        return re.sub(pattern, "", string, flags=re.MULTILINE | re.DOTALL).strip()
+
+    def _remove_command_content(self, string: str):
+        pattern = r"^.*?\[command[^\]]*\].*?$"
+        return re.sub(pattern, "", string, flags=re.MULTILINE | re.DOTALL).strip()
+
+    def _sanitize_content(self, string: str):
+        content_without_group = self._remove_group_content(string)
+        content_without_command = self._remove_command_content(content_without_group)
+        content_without_timestamp = self._remove_timestamp_content(
+            content_without_command
+        )
+
+        return content_without_timestamp
+
+    def get(self, run_id: str):
+        zip_path = self._download_bin(url=self._get_run_logs_url(run_id))
+        extract_to = os.path.dirname(zip_path)
+        extract_zip(zip_path, extract_to)
+
+        logs_dict = {}
+
+        for root, dirs, _ in os.walk(extract_to):
+            for dir_name in dirs:
+                logs_dict[dir_name] = {}
+                dir_path = os.path.join(root, dir_name)
+
+                for step_file in os.listdir(dir_path):
+                    step_file_path = os.path.join(dir_path, step_file)
+
+                    with open(step_file_path, "r", encoding="utf-8") as file:
+                        step_content = self._remove_group_content(file.read())
+
+                    step_id = remove_special_chars(pathlib.Path(step_file).stem.lower())
+                    logs_dict[dir_name][step_id] = self._sanitize_content(step_content)
+
+        return logs_dict
+
+
 class Workflow:
     def __init__(self, auth: Auth):
         self._auth = auth
+        self.log = WorkflowLog(auth)
 
     def _get_dispatch_url(self, workflow_id: str):
         return f"https://api.github.com/repos/{self._auth.org}/{self._auth.repo}/actions/workflows/{workflow_id}/dispatches"
@@ -138,46 +201,12 @@ class Workflow:
 
         return failed_jobs_display
 
-    def _download_bin(self, url: str):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
-            response = requests.get(url, headers=self._auth.get_authenticated_header())
-            temp_file.write(response.content)
-            temp_file_path = temp_file.name 
-
-        return temp_file_path
-
-    def _extract_zip(self, zip_path: str, extract_to: str):
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(extract_to)
-
-    def _get_worflow_output(self, run_id: str):
-        zip_path = self._download_bin(url=self._get_run_logs_url(run_id))
-        extract_to = os.path.realpath(zip_path)
-        self._extract_zip(zip_path, extract_to)
-
-        logs_dict = {}
-
-        for root, dirs, files in os.walk(extract_to):
-            for dir_name in dirs:
-                logs_dict[dir_name] = []
-                dir_path = os.path.join(root, dir_name)
-
-                for step_file in os.listdir(dir_path):
-                    step_file_path = os.path.join(dir_path, step_file)
-
-                    with open(step_file_path, "r", encoding="utf-8") as file:
-                        step_content = file.read()
-
-                    logs_dict[dir_name].append({step_file: step_content})
-
-        return logs_dict
-
     def invoke(self, ref: str, workflow_id: str):
         self._dispatch_workflow(ref, workflow_id)
         time.sleep(10)
         run_id = self._get_latest_run_id(workflow_id)
         conclusion, run = self._wait_for_completion(run_id)
-        output = self._get_worflow_output(run_id)
+        output = self.log.get(run_id)
 
         workflow_response = {
             "output": output,
