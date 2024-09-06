@@ -1,3 +1,6 @@
+import zipfile
+import tempfile
+import os
 import requests
 import time
 import json
@@ -78,12 +81,10 @@ class Workflow:
         )
         if response.status_code == 200:
             return response.json()
-        
+
         print("Failed to retrieve workflow run status.")
         print(response.text)
         response.raise_for_status()
-
-
 
     def _wait_for_completion(self, run_id: str, interval: int = 30):
         while True:
@@ -137,13 +138,49 @@ class Workflow:
 
         return failed_jobs_display
 
+    def _download_bin(self, url: str):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
+            response = requests.get(url, headers=self._auth.get_authenticated_header())
+            temp_file.write(response.content)
+            temp_file_path = temp_file.name 
+
+        return temp_file_path
+
+    def _extract_zip(self, zip_path: str, extract_to: str):
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_to)
+
+    def _get_worflow_output(self, run_id: str):
+        zip_path = self._download_bin(url=self._get_run_logs_url(run_id))
+        extract_to = os.path.realpath(zip_path)
+        self._extract_zip(zip_path, extract_to)
+
+        logs_dict = {}
+
+        for root, dirs, files in os.walk(extract_to):
+            for dir_name in dirs:
+                logs_dict[dir_name] = []
+                dir_path = os.path.join(root, dir_name)
+
+                for step_file in os.listdir(dir_path):
+                    step_file_path = os.path.join(dir_path, step_file)
+
+                    with open(step_file_path, "r", encoding="utf-8") as file:
+                        step_content = file.read()
+
+                    logs_dict[dir_name].append({step_file: step_content})
+
+        return logs_dict
+
     def invoke(self, ref: str, workflow_id: str):
         self._dispatch_workflow(ref, workflow_id)
         time.sleep(10)
         run_id = self._get_latest_run_id(workflow_id)
         conclusion, run = self._wait_for_completion(run_id)
+        output = self._get_worflow_output(run_id)
 
         workflow_response = {
+            "output": output,
             "run_url": run["html_url"],
             "run_id": run_id,
             "conclusion": conclusion,
