@@ -209,7 +209,7 @@ class Workflow:
         logs = self.log.get(run_id)
 
         workflow_response = {
-            "logs": logs,
+            "logs": json.dumps(logs),
             "run_url": run["html_url"],
             "run_id": run_id,
             "conclusion": conclusion,
